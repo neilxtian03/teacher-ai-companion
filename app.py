@@ -13,7 +13,7 @@ import uuid
 # --- Global Variables for Concurrency Control ---
 ACTIVE_SESSIONS = {}
 SESSION_LOCK = threading.Lock()
-MAX_CONCURRENT_USERS = 30
+MAX_CONCURRENT_USERS = 3
 MAX_QUESTIONS_PER_USER = 20
 SESSION_TIMEOUT_SECONDS = 300
 
