@@ -1,4 +1,3 @@
-# --- FULL RUNNABLE CODE ---
 import streamlit as st
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain.vectorstores import FAISS
@@ -10,13 +9,16 @@ import time
 import threading
 import uuid
 
-# --- Global Variables for Concurrency Control ---
+# --- Global Variables & Constants ---
 ACTIVE_SESSIONS = {}
 SESSION_LOCK = threading.Lock()
+# --- CHANGED LINE: Set the user limit to 1 for testing ---
 MAX_CONCURRENT_USERS = 1
 MAX_QUESTIONS_PER_USER = 20
 SESSION_TIMEOUT_SECONDS = 300
 
+# --- Core Functions (No changes here) ---
+# ... (all your get_pdf_text, get_text_chunks, etc. functions go here) ...
 def get_pdf_text(pdf_docs):
     text = ""
     for pdf in pdf_docs:
@@ -48,6 +50,8 @@ def get_document_qa_chain(api_key):
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
     return load_qa_chain(llm=model, chain_type="stuff", prompt=prompt)
 
+# --- Streamlit App ---
+
 st.set_page_config(page_title="Classroom AI Companion", layout="wide")
 st.header("📚 Classroom AI Companion")
 
@@ -57,14 +61,18 @@ if 'question_count' not in st.session_state:
     st.session_state.question_count = 0
 
 def manage_concurrency():
+    # ... (concurrency logic is the same) ...
     with SESSION_LOCK:
         current_time = time.time()
         expired_sessions = [sid for sid, t in ACTIVE_SESSIONS.items() if current_time - t > SESSION_TIMEOUT_SECONDS]
         for sid in expired_sessions:
-            del ACTIVE_SESSIONS[sid]
+            if sid in ACTIVE_SESSIONS:
+                del ACTIVE_SESSIONS[sid]
+        
         if st.session_state.session_id not in ACTIVE_SESSIONS and len(ACTIVE_SESSIONS) >= MAX_CONCURRENT_USERS:
-            st.warning(f"The chatbot has hit the maximum number of {MAX_CONCURRENT_USERS} users at this moment. Please try again in a few minutes.")
+            st.warning(f"The chatbot has hit the maximum number of {MAX_CONCURRENT_USERS} users. Please try again in a few minutes.")
             st.stop()
+        
         ACTIVE_SESSIONS[st.session_state.session_id] = current_time
 
 manage_concurrency()
@@ -82,10 +90,11 @@ with st.sidebar:
     if google_api_key:
         pdf_docs = st.file_uploader("Upload your PDF Lesson Files", accept_multiple_files=True)
         if st.button("Process Documents"):
+            # ... (processing logic) ...
             if not pdf_docs:
                 st.warning("Please upload at least one PDF document.")
             else:
-                with st.spinner("Processing documents... This may take a moment."):
+                with st.spinner("Processing documents..."):
                     raw_text = get_pdf_text(pdf_docs)
                     text_chunks = get_text_chunks(raw_text)
                     st.session_state.vector_store = get_vector_store(text_chunks, google_api_key)
@@ -93,6 +102,27 @@ with st.sidebar:
     else:
         st.sidebar.error("Teacher: Please add your Google API Key to the app's secrets.")
 
+    st.divider() # Adds a visual separating line
+
+    ### --- NEW SECTION: Live Session Visualizer --- ###
+    st.title("Live Session Status")
+    
+    active_user_count = len(ACTIVE_SESSIONS)
+    st.metric(label="Active Users", value=f"{active_user_count}", delta=f"/{MAX_CONCURRENT_USERS} Limit")
+    
+    st.write(f"Your Session ID: `{st.session_state.session_id[:8]}...`")
+
+    st.subheader("Currently Active Sessions:")
+    with SESSION_LOCK: # Safely read the list
+        if not ACTIVE_SESSIONS:
+            st.text("No users currently active.")
+        else:
+            for session_id in ACTIVE_SESSIONS.keys():
+                # Show first 8 characters of ID for readability
+                st.code(f"User: {session_id[:8]}...")
+
+# --- Main Chat Interface (No changes here) ---
+# ... (your existing chat interface code) ...
 st.subheader("Student Q&A")
 st.info(f"You have asked {st.session_state.question_count} out of {MAX_QUESTIONS_PER_USER} questions.")
 
@@ -103,17 +133,18 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 if st.session_state.question_count >= MAX_QUESTIONS_PER_USER:
-    st.warning("You have reached the maximum number of questions for this session. Please refresh the page to start a new session.")
+    st.warning("You have reached the maximum number of questions for this session.")
 else:
     if user_question := st.chat_input("Ask a question about the lesson..."):
         st.session_state.question_count += 1
+        # ... (rest of the chat logic) ...
         st.session_state.messages.append({"role": "user", "content": user_question})
         with st.chat_message("user"):
             st.markdown(user_question)
 
         if "vector_store" not in st.session_state:
             with st.chat_message("assistant"):
-                st.warning("Please ask your teacher to upload and process a document first.")
+                st.warning("Please upload and process a document first.")
             st.session_state.messages.append({"role": "assistant", "content": "Please ask your teacher to upload and process a document first."})
         else:
             with st.chat_message("assistant"):
