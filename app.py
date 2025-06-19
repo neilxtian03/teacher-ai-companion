@@ -1,3 +1,4 @@
+# --- FULL RUNNABLE CODE ---
 import streamlit as st
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain.vectorstores import FAISS
@@ -5,12 +6,16 @@ from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from pypdf import PdfReader
 from langchain.chains import LLMChain
+import time
+import threading
 import uuid
 
-# --- Constants ---
+# --- Global Variables for Concurrency Control ---
+ACTIVE_SESSIONS = {}
+SESSION_LOCK = threading.Lock()
+MAX_CONCURRENT_USERS = 30
 MAX_QUESTIONS_PER_USER = 20
-
-# --- Core Functions ---
+SESSION_TIMEOUT_SECONDS = 300
 
 def get_pdf_text(pdf_docs):
     text = ""
@@ -26,12 +31,7 @@ def get_text_chunks(text):
     chunks = text_splitter.split_text(text)
     return chunks
 
-# This is our key optimization. It caches the expensive resource creation, making it stable for many users.
-@st.cache_resource
-def create_vector_store(_uploaded_files, api_key):
-    st.info("Processing new documents. This happens once per document set and is shared by all users.")
-    raw_text = get_pdf_text(_uploaded_files)
-    text_chunks = get_text_chunks(raw_text)
+def get_vector_store(text_chunks, api_key):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
     return vector_store
@@ -48,8 +48,6 @@ def get_document_qa_chain(api_key):
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
     return load_qa_chain(llm=model, chain_type="stuff", prompt=prompt)
 
-# --- Streamlit App ---
-
 st.set_page_config(page_title="Classroom AI Companion", layout="wide")
 st.header("📚 Classroom AI Companion")
 
@@ -57,8 +55,19 @@ if 'session_id' not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 if 'question_count' not in st.session_state:
     st.session_state.question_count = 0
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = None
+
+def manage_concurrency():
+    with SESSION_LOCK:
+        current_time = time.time()
+        expired_sessions = [sid for sid, t in ACTIVE_SESSIONS.items() if current_time - t > SESSION_TIMEOUT_SECONDS]
+        for sid in expired_sessions:
+            del ACTIVE_SESSIONS[sid]
+        if st.session_state.session_id not in ACTIVE_SESSIONS and len(ACTIVE_SESSIONS) >= MAX_CONCURRENT_USERS:
+            st.warning(f"The chatbot has hit the maximum number of {MAX_CONCURRENT_USERS} users at this moment. Please try again in a few minutes.")
+            st.stop()
+        ACTIVE_SESSIONS[st.session_state.session_id] = current_time
+
+manage_concurrency()
 
 st.write("This AI can reason about the content of the uploaded documents.")
 
@@ -69,23 +78,20 @@ except (KeyError, FileNotFoundError):
     google_api_key = None
 
 with st.sidebar:
-    st.title("Teacher's Controls")
+    st.title("Lesson Files")
     if google_api_key:
-        pdf_docs = st.file_uploader("Upload PDF Lesson Files", accept_multiple_files=True)
-        
+        pdf_docs = st.file_uploader("Upload your PDF Lesson Files", accept_multiple_files=True)
         if st.button("Process Documents"):
             if not pdf_docs:
-                st.warning("Please upload at least one PDF document before processing.")
+                st.warning("Please upload at least one PDF document.")
             else:
                 with st.spinner("Processing documents... This may take a moment."):
-                    st.session_state.vector_store = create_vector_store(pdf_docs, google_api_key)
-                    st.success("Documents processed and ready for all students!")
+                    raw_text = get_pdf_text(pdf_docs)
+                    text_chunks = get_text_chunks(raw_text)
+                    st.session_state.vector_store = get_vector_store(text_chunks, google_api_key)
+                    st.success("Documents processed successfully!")
     else:
-        st.sidebar.error("Teacher: Please add your Google API Key to secrets.")
-
-    st.divider()
-    st.title("Your Session Info")
-    st.write(f"Session ID: `{st.session_state.session_id[:8]}...`")
+        st.sidebar.error("Teacher: Please add your Google API Key to the app's secrets.")
 
 st.subheader("Student Q&A")
 st.info(f"You have asked {st.session_state.question_count} out of {MAX_QUESTIONS_PER_USER} questions.")
@@ -97,17 +103,19 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 if st.session_state.question_count >= MAX_QUESTIONS_PER_USER:
-    st.warning("You have reached the maximum number of questions for this session.")
+    st.warning("You have reached the maximum number of questions for this session. Please refresh the page to start a new session.")
 else:
     if user_question := st.chat_input("Ask a question about the lesson..."):
-        if st.session_state.vector_store is None:
-            st.warning("Please ask your teacher to upload and process a document first.")
+        st.session_state.question_count += 1
+        st.session_state.messages.append({"role": "user", "content": user_question})
+        with st.chat_message("user"):
+            st.markdown(user_question)
+
+        if "vector_store" not in st.session_state:
+            with st.chat_message("assistant"):
+                st.warning("Please upload and process a document first.")
+            st.session_state.messages.append({"role": "assistant", "content": "Please ask your teacher to upload and process a document first."})
         else:
-            st.session_state.question_count += 1
-            st.session_state.messages.append({"role": "user", "content": user_question})
-            with st.chat_message("user"):
-                st.markdown(user_question)
-            
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
                     vector_store = st.session_state.vector_store
@@ -121,6 +129,6 @@ else:
                         response = qa_chain({"input_documents": retrieved_docs, "question": user_question}, return_only_outputs=True)
                         response_text = response["output_text"]
                     else:
-                        response_text = "I'm sorry, but your question does not seem related to the content of the provided document."
+                        response_text = "I'm sorry, but your question does not seem related to the content of the provided document. I can only answer questions about the lesson materials."
                     st.markdown(response_text)
                 st.session_state.messages.append({"role": "assistant", "content": response_text})
