@@ -114,12 +114,13 @@ def get_document_qa_chain(api_key):
     Your goal is to answer the user's question by synthesizing information from the provided document context, which may include text, table data, and image descriptions.
     Answer in the language of the user's question (English or Filipino).
 
-    Follow these rules:
-    1.  Analyze the provided CONTEXT to understand the core concepts.
-    2.  Synthesize your answer by connecting relevant information from the context.
-    3.  If the context describes tables or images, use that information to answer the question.
-    4.  Your final answer MUST be based entirely on the information from the CONTEXT. Do not use external knowledge.
-    5.  If you cannot answer, state "I cannot answer this with the provided document." or "Hindi ko ito masasagot gamit ang dokumento."
+    Follow these rules strictly:
+    1.  Analyze the provided CONTEXT snippets to understand the core concepts.
+    2.  Synthesize and formulate your answer by connecting relevant information from the context.
+    3.  If the context contains code examples, use them to build your answer.
+    4.  If the context describes tables or images, use that information to answer the question.
+    5.  Your final answer MUST be based entirely on the information that can be inferred from the provided CONTEXT. Do not use any external knowledge but may get few information as long as it is relevant.
+    6.  If you cannot answer, state "I cannot answer this with the provided document." or "Hindi ko ito masasagot gamit ang dokumento."
 
     CONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nSynthesized Answer (in English or Filipino):"""
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.2, google_api_key=api_key)
