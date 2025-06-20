@@ -119,7 +119,7 @@ def get_document_qa_chain(api_key):
     2.  Synthesize and formulate your answer by connecting relevant information from the context.
     3.  If the context contains code examples, or asking code examples, use them to build your answer.
     4.  If the context describes tables or images, use that information to answer the question.
-    5.  Your final answer CAN be based entirely on the information that can be inferred from the provided CONTEXT. You may get information as long as it is relevant.
+    5.  Your final answer CAN be based entirely on the information that can be inferred from the provided CONTEXT. You may get information outside the document as long as it is relevant.
     6.  If you cannot answer, state "I cannot answer this with the provided document." or "Hindi ko ito masasagot gamit ang dokumento."
 
     CONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nSynthesized Answer (in English or Filipino):"""
