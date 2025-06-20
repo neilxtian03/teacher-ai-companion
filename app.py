@@ -17,7 +17,7 @@ from langchain.chains import LLMChain
 from langchain.chains.question_answering import load_qa_chain
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
-
+from langchain_core.messages import HumanMessage
 
 # --- Global Variables & Constants for Concurrency and Limits ---
 ACTIVE_SESSIONS = {}
@@ -69,14 +69,16 @@ def process_multimodal_pdfs(pdf_files, api_key):
                     xref = img[0]
                     base_image = doc.extract_image(xref)
                     image_bytes = base_image["image"]
-                    
-                    # Send image to Gemini for description
-                    image_b64 = base64.b64encode(image_bytes).decode()
-                    prompt_payload = [
-                        {"type": "text", "text": "Describe this image in detail. What information does it convey? If it's a chart or graph, explain what it shows. Answer in English or Filipino."},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}}
-                    ]
-                    description_response = image_description_model.invoke(prompt_payload)
+
+                    # We now wrap the payload in a HumanMessage object
+                    message = HumanMessage(
+                        content=[
+                            {"type": "text", "text": "Describe this image in detail. What information does it convey? If it's a chart or graph, explain what it shows. Answer in English or Filipino."},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(image_bytes).decode()}"}}
+                        ]
+                    )
+                    # Now we invoke the model with the correctly formatted message
+                    description_response = image_description_model.invoke([message])
                     all_content_chunks.append(f"Image Description (from page {page_num + 1}):\n{description_response.content}\n")
         except Exception as e:
             st.warning(f"Could not process images in {pdf_file.name}. Error: {e}")
