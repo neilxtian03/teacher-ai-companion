@@ -114,8 +114,22 @@ if 'offer_made' not in st.session_state: st.session_state.offer_made = False
 if 'last_context' not in st.session_state: st.session_state.last_context = None
 
 # (Concurrency management, API key check, and Teacher Controls are unchanged)
-# ...
-manage_concurrency() # Function defined in previous versions
+# --- PASTE THE MISSING FUNCTION HERE ---
+def manage_concurrency():
+    with SESSION_LOCK:
+        current_time = time.time()
+        expired_sessions = [sid for sid, t in ACTIVE_SESSIONS.items() if current_time - t > SESSION_TIMEOUT_SECONDS]
+        for sid in expired_sessions:
+            del ACTIVE_SESSIONS[sid]
+        if st.session_state.session_id not in ACTIVE_SESSIONS and len(ACTIVE_SESSIONS) >= MAX_CONCURRENT_USERS:
+            st.warning(f"The chatbot is at maximum capacity ({MAX_CONCURRENT_USERS} users). Please try again in a few minutes.")
+            st.stop()
+        ACTIVE_SESSIONS[st.session_state.session_id] = time.time()
+
+# NOW THIS LINE WILL WORK PERFECTLY
+manage_concurrency()
+
+# Function defined in previous versions
 st.write("This AI answers from your documents, then offers more help.")
 try:
     google_api_key = st.secrets["google_api_key"]
