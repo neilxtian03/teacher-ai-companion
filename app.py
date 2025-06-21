@@ -228,8 +228,9 @@ else:
                     if "DOCUMENT_SEARCH" in tool_choice:
                         st.info("✅ Searching within the document...")
                         qa_chain = get_document_qa_chain(google_api_key)
-                        response = qa_chain.invoke({"input_documents": retrieved_docs, "question": user_question})
-                        response_text = response["answer"] # Use "answer" key
+                        # We now use the key "context" to match the prompt template variable
+                        response = qa_chain.invoke({"context": retrieved_docs, "question": user_question})
+                        response_text = response["answer"]
 
                     elif "GENERAL_KNOWLEDGE_SEARCH" in tool_choice:
                         st.info("🧠 Combining general knowledge with document context...")
