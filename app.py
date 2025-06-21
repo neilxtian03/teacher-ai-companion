@@ -1,5 +1,5 @@
 # ==============================================================================
-# FINAL (v5), CONTEXT-AWARE HYBRID AI AGENT
+# FINAL (v7), MODERNIZED & COMPLETE AI TEACHING COMPANION
 # ==============================================================================
 import streamlit as st
 import os
@@ -7,14 +7,15 @@ import uuid
 import threading
 import time
 import base64
-import fitz
-from unstructured.partition.pdf import partition_pdf
+import fitz  # PyMuPDF for image extraction
+from unstructured.partition.pdf import partition_pdf # For advanced PDF parsing
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain.vectorstores import FAISS
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
-from langchain.chains.question_answering import load_qa_chain
+# The modern, recommended way to create a "stuff" documents chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.messages import HumanMessage
 
@@ -23,43 +24,63 @@ ACTIVE_SESSIONS = {}
 SESSION_LOCK = threading.Lock()
 MAX_CONCURRENT_USERS = 30
 MAX_QUESTIONS_PER_USER = 20
-SESSION_TIMEOUT_SECONDS = 300
+SESSION_TIMEOUT_SECONDS = 300  # 5 minutes
 
 # --- Core Processing Functions ---
+
 def process_multimodal_pdfs(pdf_files, api_key):
+    """Processes PDF files by extracting text, tables, and image descriptions."""
     all_content_chunks = []
     image_description_model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=api_key)
-    temp_dir = "temp_pdf_files"; os.makedirs(temp_dir, exist_ok=True)
+    temp_dir = "temp_pdf_files"
+    if not os.path.exists(temp_dir): os.makedirs(temp_dir)
+
     for pdf_file in pdf_files:
-        file_path = os.path.join(temp_dir, pdf_file.name);
+        file_path = os.path.join(temp_dir, pdf_file.name)
         with open(file_path, "wb") as f: f.write(pdf_file.getbuffer())
-        st.info(f"Analyzing text & tables in {pdf_file.name}...")
+
+        st.info(f"Analyzing text and tables in {pdf_file.name}...")
         elements = partition_pdf(filename=file_path, strategy="hi_res", infer_table_structure=True, model_name="yolox")
         for el in elements:
-            if "unstructured.documents.elements.Table" in str(type(el)): all_content_chunks.append(f"Table Content:\n{el.metadata.text_as_html}\n")
-            else: all_content_chunks.append(el.text)
-        st.info(f"Analyzing images in {pdf_file.name}...");
+            if "unstructured.documents.elements.Table" in str(type(el)):
+                all_content_chunks.append(f"Table Content:\n{el.metadata.text_as_html}\n")
+            else:
+                all_content_chunks.append(el.text)
+        
+        st.info(f"Analyzing images in {pdf_file.name}...")
         try:
             doc = fitz.open(file_path)
             for page_num in range(len(doc)):
                 for img in doc.get_page_images(page_num):
-                    xref, base_image = img[0], doc.extract_image(img[0])
-                    message = HumanMessage(content=[{"type": "text", "text": "Describe this image in detail..."}, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(base_image['image']).decode()}"}}])
-                    desc = image_description_model.invoke([message]).content
-                    all_content_chunks.append(f"Image Description (page {page_num + 1}):\n{desc}\n")
-        except Exception as e: st.warning(f"Could not process an image in {pdf_file.name}. Error: {e}")
+                    xref = img[0]
+                    base_image = doc.extract_image(xref)
+                    message = HumanMessage(
+                        content=[
+                            {"type": "text", "text": "Describe this image in detail. What information does it convey? If it's a chart or graph, explain what it shows. Answer in English or Filipino."},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64.b64encode(base_image['image']).decode()}"}}
+                        ]
+                    )
+                    description_response = image_description_model.invoke([message])
+                    all_content_chunks.append(f"Image Description (from page {page_num + 1}):\n{description_response.content}\n")
+        except Exception as e:
+            st.warning(f"Could not process an image in {pdf_file.name}. Error: {e}")
+
     return all_content_chunks
 
 def get_text_chunks(content_list):
+    """Takes a list of content strings and splits them into documents."""
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     return text_splitter.create_documents(content_list)
 
 def get_vector_store(documents, api_key):
+    """Creates a FAISS vector store from document chunks."""
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
     return FAISS.from_documents(documents, embedding=embeddings)
 
-# --- AI Chains ---
+# --- AI Chains: Router, Document QA, General Knowledge, and Synthesis ---
+
 def get_router_chain(api_key):
+    """This context-aware chain decides which tool to use."""
     prompt_template = """You are an expert routing agent. Based on the DOCUMENT CONTEXT and the USER'S QUESTION, your task is to choose the best tool.
     Here are your tools:
     1.  **DOCUMENT_SEARCH**: Use this tool if the question is asking directly about the content, events, or details *found within the provided DOCUMENT CONTEXT*.
@@ -75,19 +96,62 @@ def get_router_chain(api_key):
     return LLMChain(llm=model, prompt=prompt)
 
 def get_document_qa_chain(api_key):
-    prompt_template = "You are an expert teaching assistant... (full bilingual prompt)"
+    """This chain answers questions based ONLY on the document, using the modern LCEL approach."""
+    prompt_template_str = """You are an expert teaching assistant. Ikaw ay isang dalubhasang teaching assistant.
+Your goal is to answer the user's question by synthesizing information from the provided document context, which may include text, table data, and image descriptions.
+Answer in the language of the user's question (English or Filipino).
+
+Follow these rules:
+1.  Analyze the provided CONTEXT to understand the core concepts.
+2.  Synthesize your answer by connecting relevant information from the context.
+3.  If the context describes tables or images, use that information to answer the question.
+4.  Your final answer MUST be based entirely on the information from the CONTEXT. Do not use external knowledge.
+5.  If you cannot answer, state "I cannot answer this with the provided document." or "Hindi ko ito masasagot gamit ang dokumento."
+
+CONTEXT:
+{context}
+
+QUESTION:
+{question}
+
+Synthesized Answer (in English or Filipino):"""
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.2, google_api_key=api_key)
-    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-    return load_qa_chain(llm=model, chain_type="stuff", prompt=prompt)
+    prompt = PromptTemplate.from_template(prompt_template_str)
+    # Use the new, recommended function instead of the deprecated load_qa_chain
+    return create_stuff_documents_chain(llm=model, prompt=prompt)
 
 def get_general_knowledge_chain(api_key):
-    prompt_template = "You are a helpful and knowledgeable teaching assistant... (full bilingual prompt)"
+    """This chain gets a generic answer using the AI's general knowledge."""
+    prompt_template = """You are a helpful and knowledgeable teaching assistant. Ikaw ay isang matulungin at maalam na teaching assistant.
+Answer the user's question clearly and concisely. Answer in the language of the user's question (English or Filipino).
+
+Question: {question}
+Answer:"""
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.7, google_api_key=api_key)
     prompt = PromptTemplate(template=prompt_template, input_variables=["question"])
     return LLMChain(llm=model, prompt=prompt)
 
 def get_synthesis_chain(api_key):
-    prompt_template = "You are a master teaching assistant... (full synthesis prompt)"
+    """This chain combines general knowledge with document context into a final, relevant answer."""
+    prompt_template = """You are a master teaching assistant. Your job is to create a comprehensive and relevant answer for a student by combining two pieces of information: a general knowledge answer and specific context from a document they are studying.
+
+Follow these steps:
+1.  Start with the GENERAL KNOWLEDGE ANSWER to provide the main definition or explanation.
+2.  Then, seamlessly connect this general knowledge to the specific DOCUMENT CONTEXT. Explain how the concept applies to the document. Use phrases like "In the document you're reading...", "This relates to the story because...", or "For example, in the provided text...".
+3.  Answer in the language of the user's original question (English or Filipino).
+
+---
+USER'S ORIGINAL QUESTION:
+{question}
+
+GENERAL KNOWLEDGE ANSWER:
+{general_answer}
+
+DOCUMENT CONTEXT:
+{document_context}
+---
+
+Your Final, Synthesized Answer:"""
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.5, google_api_key=api_key)
     prompt = PromptTemplate(template=prompt_template, input_variables=["question", "general_answer", "document_context"])
     return LLMChain(llm=model, prompt=prompt)
@@ -119,17 +183,17 @@ except (KeyError, FileNotFoundError):
 with st.sidebar:
     st.title("Teacher's Controls")
     if google_api_key:
-        pdf_docs = st.file_uploader("Upload PDF files", accept_multiple_files=True)
+        pdf_docs = st.file_uploader("Upload PDF files (with text, tables, images)", accept_multiple_files=True)
         if st.button("Process Documents"):
             if not pdf_docs: st.warning("Please upload at least one PDF.")
             else:
-                with st.spinner("Performing advanced analysis..."):
-                    raw_chunks = process_multimodal_pdfs(pdf_docs, google_api_key)
-                    docs = get_text_chunks(raw_chunks)
-                    st.info("Building knowledge base...")
-                    st.session_state.vector_store = get_vector_store(docs, google_api_key)
+                with st.spinner("Performing advanced document analysis... This may take a while."):
+                    raw_chunks_list = process_multimodal_pdfs(pdf_docs, google_api_key)
+                    documents = get_text_chunks(raw_chunks_list)
+                    st.info("Building searchable knowledge base...")
+                    st.session_state.vector_store = get_vector_store(documents, google_api_key)
                     st.success("Documents processed! The AI is ready.")
-    else: st.sidebar.error("Teacher: Add your API Key to enable.")
+    else: st.sidebar.error("Teacher: Add your Google API Key to enable.")
 
 st.subheader("Student Q&A")
 st.info(f"Questions asked: {st.session_state.question_count}/{MAX_QUESTIONS_PER_USER}")
@@ -158,14 +222,15 @@ else:
                     
                     router_chain = get_router_chain(google_api_key)
                     router_result = router_chain.invoke({"context": document_context, "question": user_question})
-                    tool_choice = router_result['text'] # .invoke() returns a dict, we need the text
+                    tool_choice = router_result['text']
                     
                     response_text = ""
                     if "DOCUMENT_SEARCH" in tool_choice:
                         st.info("✅ Searching within the document...")
                         qa_chain = get_document_qa_chain(google_api_key)
-                        response = qa_chain({"input_documents": retrieved_docs, "question": user_question}, return_only_outputs=True)
-                        response_text = response["output_text"]
+                        response = qa_chain.invoke({"input_documents": retrieved_docs, "question": user_question})
+                        response_text = response["answer"] # Use "answer" key
+
                     elif "GENERAL_KNOWLEDGE_SEARCH" in tool_choice:
                         st.info("🧠 Combining general knowledge with document context...")
                         general_chain = get_general_knowledge_chain(google_api_key)
@@ -173,9 +238,8 @@ else:
                         general_answer = general_answer_result['text']
                         
                         synthesis_chain = get_synthesis_chain(google_api_key)
-                        # --- FIXED SYNTHESIS CALL ---
                         synthesis_result = synthesis_chain.invoke({"question": user_question, "general_answer": general_answer, "document_context": document_context})
-                        response_text = synthesis_result['text'] # Extract text from result dict
+                        response_text = synthesis_result['text']
                     else: # IRRELEVANT
                         response_text = "I'm sorry, that question does not seem related to the content of the provided document. Let's focus on the lesson."
                     
