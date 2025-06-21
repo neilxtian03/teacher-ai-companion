@@ -1,5 +1,5 @@
 # ==============================================================================
-# FINAL (v7), MODERNIZED & COMPLETE AI TEACHING COMPANION
+# FINAL (v10), FULLY MODERNIZED WITH LCEL - COMPLETE CODE
 # ==============================================================================
 import streamlit as st
 import os
@@ -13,11 +13,11 @@ from unstructured.partition.pdf import partition_pdf # For advanced PDF parsing
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain.vectorstores import FAISS
 from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-# The modern, recommended way to create a "stuff" documents chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.messages import HumanMessage
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 
 # --- Global Variables & Constants ---
 ACTIVE_SESSIONS = {}
@@ -77,7 +77,7 @@ def get_vector_store(documents, api_key):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
     return FAISS.from_documents(documents, embedding=embeddings)
 
-# --- AI Chains: Router, Document QA, General Knowledge, and Synthesis ---
+# --- AI Chains (All modernized with LCEL) ---
 
 def get_router_chain(api_key):
     """This context-aware chain decides which tool to use."""
@@ -93,10 +93,10 @@ def get_router_chain(api_key):
     Tool:"""
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.0, google_api_key=api_key)
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-    return LLMChain(llm=model, prompt=prompt)
+    return prompt | model | StrOutputParser()
 
 def get_document_qa_chain(api_key):
-    """This chain answers questions based ONLY on the document, using the modern LCEL approach."""
+    """This chain answers questions based ONLY on the document."""
     prompt_template_str = """You are an expert teaching assistant. Ikaw ay isang dalubhasang teaching assistant.
 Your goal is to answer the user's question by synthesizing information from the provided document context, which may include text, table data, and image descriptions.
 Answer in the language of the user's question (English or Filipino).
@@ -108,16 +108,9 @@ Follow these rules:
 4.  Your final answer MUST be based entirely on the information from the CONTEXT. Do not use external knowledge.
 5.  If you cannot answer, state "I cannot answer this with the provided document." or "Hindi ko ito masasagot gamit ang dokumento."
 
-CONTEXT:
-{context}
-
-QUESTION:
-{question}
-
-Synthesized Answer (in English or Filipino):"""
+CONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nSynthesized Answer (in English or Filipino):"""
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.2, google_api_key=api_key)
     prompt = PromptTemplate.from_template(prompt_template_str)
-    # Use the new, recommended function instead of the deprecated load_qa_chain
     return create_stuff_documents_chain(llm=model, prompt=prompt)
 
 def get_general_knowledge_chain(api_key):
@@ -129,7 +122,7 @@ Question: {question}
 Answer:"""
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.7, google_api_key=api_key)
     prompt = PromptTemplate(template=prompt_template, input_variables=["question"])
-    return LLMChain(llm=model, prompt=prompt)
+    return prompt | model | StrOutputParser()
 
 def get_synthesis_chain(api_key):
     """This chain combines general knowledge with document context into a final, relevant answer."""
@@ -141,20 +134,12 @@ Follow these steps:
 3.  Answer in the language of the user's original question (English or Filipino).
 
 ---
-USER'S ORIGINAL QUESTION:
-{question}
-
-GENERAL KNOWLEDGE ANSWER:
-{general_answer}
-
-DOCUMENT CONTEXT:
-{document_context}
----
+USER'S ORIGINAL QUESTION:\n{question}\n\nGENERAL KNOWLEDGE ANSWER:\n{general_answer}\n\nDOCUMENT CONTEXT:\n{document_context}\n---
 
 Your Final, Synthesized Answer:"""
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.5, google_api_key=api_key)
     prompt = PromptTemplate(template=prompt_template, input_variables=["question", "general_answer", "document_context"])
-    return LLMChain(llm=model, prompt=prompt)
+    return prompt | model | StrOutputParser()
 
 # --- Streamlit App UI and Main Logic ---
 st.set_page_config(page_title="Hybrid AI Companion", layout="wide")
@@ -221,26 +206,25 @@ else:
                     document_context = "\n\n".join([doc.page_content for doc in retrieved_docs])
                     
                     router_chain = get_router_chain(google_api_key)
-                    router_result = router_chain.invoke({"context": document_context, "question": user_question})
-                    tool_choice = router_result['text']
+                    tool_choice = router_chain.invoke({"context": document_context, "question": user_question})
                     
                     response_text = ""
                     if "DOCUMENT_SEARCH" in tool_choice:
                         st.info("✅ Searching within the document...")
                         qa_chain = get_document_qa_chain(google_api_key)
-                        # We now use the key "context" to match the prompt template variable
-                        response = qa_chain.invoke({"context": retrieved_docs, "question": user_question})
-                        response_text = response
-
+                        response_text = qa_chain.invoke({"context": retrieved_docs, "question": user_question})
+                    
                     elif "GENERAL_KNOWLEDGE_SEARCH" in tool_choice:
                         st.info("🧠 Combining general knowledge with document context...")
                         general_chain = get_general_knowledge_chain(google_api_key)
-                        general_answer_result = general_chain.invoke({"question": user_question})
-                        general_answer = general_answer_result['text']
+                        general_answer = general_chain.invoke({"question": user_question})
                         
                         synthesis_chain = get_synthesis_chain(google_api_key)
-                        synthesis_result = synthesis_chain.invoke({"question": user_question, "general_answer": general_answer, "document_context": document_context})
-                        response_text = synthesis_result['text']
+                        response_text = synthesis_chain.invoke({
+                            "question": user_question, 
+                            "general_answer": general_answer, 
+                            "document_context": document_context
+                        })
                     else: # IRRELEVANT
                         response_text = "I'm sorry, that question does not seem related to the content of the provided document. Let's focus on the lesson."
                     
