@@ -157,7 +157,8 @@ else:
                     document_context = "\n\n".join([doc.page_content for doc in retrieved_docs])
                     
                     router_chain = get_router_chain(google_api_key)
-                    tool_choice = router_chain.run({"context": document_context, "question": user_question})
+                    router_result = router_chain.invoke({"context": document_context, "question": user_question})
+                    tool_choice = router_result['text'] # .invoke() returns a dict, we need the text
                     
                     response_text = ""
                     if "DOCUMENT_SEARCH" in tool_choice:
@@ -168,9 +169,13 @@ else:
                     elif "GENERAL_KNOWLEDGE_SEARCH" in tool_choice:
                         st.info("🧠 Combining general knowledge with document context...")
                         general_chain = get_general_knowledge_chain(google_api_key)
-                        general_answer = general_chain.run(user_question)
+                        general_answer_result = general_chain.invoke({"question": user_question})
+                        general_answer = general_answer_result['text']
+                        
                         synthesis_chain = get_synthesis_chain(google_api_key)
-                        response_text = synthesis_chain.run({"question": user_question, "general_answer": general_answer, "document_context": document_context})
+                        # --- FIXED SYNTHESIS CALL ---
+                        synthesis_result = synthesis_chain.invoke({"question": user_question, "general_answer": general_answer, "document_context": document_context})
+                        response_text = synthesis_result['text'] # Extract text from result dict
                     else: # IRRELEVANT
                         response_text = "I'm sorry, that question does not seem related to the content of the provided document. Let's focus on the lesson."
                     
