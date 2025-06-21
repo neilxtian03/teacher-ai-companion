@@ -1,5 +1,5 @@
 # ==============================================================================
-# FINAL, COMPLETE, HYBRID MULTI-MODAL AI TEACHING COMPANION
+# FINAL, COMPLETE, HYBRID MULTI-MODAL AI TEACHING COMPANION (v4)
 # ==============================================================================
 import streamlit as st
 import os
@@ -18,39 +18,28 @@ from langchain.chains.question_answering import load_qa_chain
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.messages import HumanMessage
 
-# --- Global Variables & Constants for Concurrency and Limits ---
+# --- Global Variables & Constants ---
 ACTIVE_SESSIONS = {}
 SESSION_LOCK = threading.Lock()
 MAX_CONCURRENT_USERS = 30
 MAX_QUESTIONS_PER_USER = 20
 SESSION_TIMEOUT_SECONDS = 300  # 5 minutes
 
-# --- Core Multi-Modal Processing Engine ---
+# --- Core Processing Functions ---
 
 def process_multimodal_pdfs(pdf_files, api_key):
-    """
-    Processes PDF files by extracting text, tables, and generating descriptions for images.
-    Returns a list of strings, where each string is a chunk of content.
-    """
+    """Processes PDF files by extracting text, tables, and image descriptions."""
     all_content_chunks = []
     image_description_model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", google_api_key=api_key)
-    
     temp_dir = "temp_pdf_files"
-    if not os.path.exists(temp_dir):
-        os.makedirs(temp_dir)
+    if not os.path.exists(temp_dir): os.makedirs(temp_dir)
 
     for pdf_file in pdf_files:
         file_path = os.path.join(temp_dir, pdf_file.name)
-        with open(file_path, "wb") as f:
-            f.write(pdf_file.getbuffer())
+        with open(file_path, "wb") as f: f.write(pdf_file.getbuffer())
 
         st.info(f"Analyzing text and tables in {pdf_file.name}...")
-        elements = partition_pdf(
-            filename=file_path,
-            strategy="hi_res",
-            infer_table_structure=True,
-            model_name="yolox"
-        )
+        elements = partition_pdf(filename=file_path, strategy="hi_res", infer_table_structure=True, model_name="yolox")
         for el in elements:
             if "unstructured.documents.elements.Table" in str(type(el)):
                 all_content_chunks.append(f"Table Content:\n{el.metadata.text_as_html}\n")
@@ -87,7 +76,7 @@ def get_vector_store(documents, api_key):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=api_key)
     return FAISS.from_documents(documents, embedding=embeddings)
 
-# --- AI Chains: Router, Document QA, and General Knowledge ---
+# --- AI Chains: Router, Document QA, General Knowledge, and Synthesis ---
 
 def get_router_chain(api_key):
     """This chain decides which tool to use."""
@@ -126,19 +115,13 @@ Follow these rules:
 4.  Your final answer MUST be based entirely on the information from the CONTEXT. Do not use external knowledge.
 5.  If you cannot answer, state "I cannot answer this with the provided document." or "Hindi ko ito masasagot gamit ang dokumento."
 
-CONTEXT:
-{context}
-
-QUESTION:
-{question}
-
-Synthesized Answer (in English or Filipino):"""
+CONTEXT:\n{context}\n\nQUESTION:\n{question}\n\nSynthesized Answer (in English or Filipino):"""
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.2, google_api_key=api_key)
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
     return load_qa_chain(llm=model, chain_type="stuff", prompt=prompt)
 
 def get_general_knowledge_chain(api_key):
-    """This chain answers questions using the AI's general knowledge."""
+    """This chain gets a generic answer using the AI's general knowledge."""
     prompt_template = """You are a helpful and knowledgeable teaching assistant. Ikaw ay isang matulungin at maalam na teaching assistant.
 Answer the user's question clearly and concisely. Answer in the language of the user's question (English or Filipino).
 
@@ -146,6 +129,31 @@ Question: {question}
 Answer:"""
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.7, google_api_key=api_key)
     prompt = PromptTemplate(template=prompt_template, input_variables=["question"])
+    return LLMChain(llm=model, prompt=prompt)
+
+def get_synthesis_chain(api_key):
+    """This chain combines general knowledge with document context into a final, relevant answer."""
+    prompt_template = """You are a master teaching assistant. Your job is to create a comprehensive and relevant answer for a student by combining two pieces of information: a general knowledge answer and specific context from a document they are studying.
+
+Follow these steps:
+1.  Start with the GENERAL KNOWLEDGE ANSWER to provide the main definition or explanation.
+2.  Then, seamlessly connect this general knowledge to the specific DOCUMENT CONTEXT. Explain how the concept applies to the document. Use phrases like "In the document you're reading...", "This relates to the story because...", or "For example, in the provided text...".
+3.  Answer in the language of the user's original question (English or Filipino).
+
+---
+USER'S ORIGINAL QUESTION:
+{question}
+
+GENERAL KNOWLEDGE ANSWER:
+{general_answer}
+
+DOCUMENT CONTEXT:
+{document_context}
+---
+
+Your Final, Synthesized Answer:"""
+    model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.5, google_api_key=api_key)
+    prompt = PromptTemplate(template=prompt_template, input_variables=["question", "general_answer", "document_context"])
     return LLMChain(llm=model, prompt=prompt)
 
 # --- Streamlit App UI and Main Logic ---
@@ -170,7 +178,6 @@ def manage_concurrency():
         ACTIVE_SESSIONS[st.session_state.session_id] = time.time()
 
 manage_concurrency()
-
 st.write("This AI can answer from the document or use its general knowledge to provide more context.")
 
 try:
@@ -234,9 +241,24 @@ else:
                         response_text = response["output_text"]
                     
                     elif "GENERAL_KNOWLEDGE_SEARCH" in tool_choice:
-                        st.info("🧠 Providing additional context from general knowledge...")
+                        st.info("🧠 Combining general knowledge with document context...")
+                        # Step 1: Get Document Context
+                        vector_store = st.session_state.vector_store
+                        retrieved_docs = vector_store.similarity_search(user_question, k=3)
+                        document_context = "\n\n".join([doc.page_content for doc in retrieved_docs])
+                        
+                        # Step 2: Get General Knowledge
                         general_chain = get_general_knowledge_chain(google_api_key)
-                        response_text = general_chain.run(user_question)
+                        general_answer = general_chain.run(user_question)
+                        
+                        # Step 3: Synthesize
+                        synthesis_chain = get_synthesis_chain(google_api_key)
+                        synthesis_inputs = {
+                            "question": user_question,
+                            "general_answer": general_answer,
+                            "document_context": document_context
+                        }
+                        response_text = synthesis_chain.run(synthesis_inputs)
 
                     else: # IRRELEVANT
                         response_text = "I'm sorry, that question seems off-topic. Let's focus on the lesson."
